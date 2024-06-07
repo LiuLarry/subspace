@@ -36,6 +36,7 @@ subspace-archiving = { version = "0.1.0", path = "../subspace-archiving" }
 subspace-core-primitives = { version = "0.1.0", path = "../subspace-core-primitives" }
 subspace-erasure-coding = { version = "0.1.0", path = "../subspace-erasure-coding" }
 subspace-proof-of-space = { version = "0.1.0", path = "../subspace-proof-of-space", features = ["parallel"] }
+randrw-s3-client = { version = "0.1.0", path = "../randrw-s3-client" }
 subspace-verification = { version = "0.1.0", path = "../subspace-verification" }
 thiserror = "1.0.59"
 tokio = { version = "1.37.0", features = ["macros", "parking_lot", "rt-multi-thread", "signal", "sync"] }

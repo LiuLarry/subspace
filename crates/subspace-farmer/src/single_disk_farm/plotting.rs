@@ -513,7 +513,27 @@ async fn plot_single_sector_internal(
 
         let start = Instant::now();
 
-        {
+        if std::env::var("RANDRW_S3_SERVER").is_ok() {
+            const RETRY: u8 = 5;
+            let mut count = 0;
+
+            let sector = bytes::Bytes::from(sector);
+
+            loop {
+                let sector = sector.clone();
+                let data = vec![1u8; size as usize];
+                let result = randrw_s3_client::update_object(
+                    &covert_to_s3key(&plot_file.path()),
+                    sector_index,
+                    sector,
+                    Cursor::new(data)
+                );
+                match result {
+                    // Error => 
+                }
+                // TODO: import randrw_s3_client and use update_object method.
+            }
+        } else {
             let sector_write_base_offset = u64::from(sector_index) * sector_size as u64;
             let mut sector_write_offset = sector_write_base_offset;
             while let Some(maybe_sector_chunk) = sector.next().await {

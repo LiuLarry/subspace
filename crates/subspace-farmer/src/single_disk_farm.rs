@@ -809,6 +809,9 @@ impl SingleDiskFarm {
             let span = span.clone();
             let global_mutex = Arc::clone(&global_mutex);
 
+            let plot_file_key = crate::covert_to_s3key(&directory.join(Self::PLOT_FILE));
+            let plot_file_key = plot_file_key.clone();
+
             move || {
                 let _span_guard = span.enter();
 
@@ -983,6 +986,7 @@ impl SingleDiskFarm {
             sectors_being_modified,
             read_sector_record_chunks_mode,
             global_mutex,
+            plot_file_key
         );
 
         let reading_join_handle = tokio::task::spawn_blocking({
@@ -1336,31 +1340,53 @@ impl SingleDiskFarm {
             Arc::new(AsyncRwLock::new(sectors_metadata))
         };
 
-        #[cfg(not(windows))]
-        let plot_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .advise_random_access()
-            .open(directory.join(Self::PLOT_FILE))?;
+        let plot_file_key = crate::covert_to_s3key(&directory.join(Self::PLOT_FILE));
 
-        #[cfg(not(windows))]
-        plot_file.advise_random_access()?;
+        let plot_file = if std::env::var("RANDRW_S3_SERVER").is_ok() {
+            // TODO: import s3client and use exist method;
+            let exist = false;
 
-        #[cfg(windows)]
-        let plot_file = UnbufferedIoFileWindows::open(&directory.join(Self::PLOT_FILE))?;
+            if !exist {
+                // TODO: import s3client and use put_zero_object
+            }
 
-        if plot_file.size()? != plot_file_size {
-            // Allocating the whole file (`set_len` below can create a sparse file, which will cause
-            // writes to fail later)
-            plot_file
-                .preallocate(plot_file_size)
-                .map_err(SingleDiskFarmError::CantPreallocatePlotFile)?;
-            // Truncating file (if necessary)
-            plot_file.set_len(plot_file_size)?;
-        }
+            #[cfg(not(windows))]
+            let plot_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(directory.join(Self::PLOT_FILE_REMOTE))?;
 
-        let plot_file = Arc::new(plot_file);
+            #[cfg(windows)]
+            let plot_file = UnbufferedIoFileWindows::open(&directory.join(Self::PLOT_FILE_REMOTE))?;
+            Arc::new(plot_file)
+        } else {
+            #[cfg(not(windows))]
+            let plot_file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .advise_random_access()
+                .open(directory.join(Self::PLOT_FILE))?;
+
+            #[cfg(not(windows))]
+            plot_file.advise_random_access()?;
+
+            #[cfg(windows)]
+            let plot_file = UnbufferedIoFileWindows::open(&directory.join(Self::PLOT_FILE))?;
+
+            if plot_file.size()? != plot_file_size {
+                // Allocating the whole file (`set_len` below can create a sparse file, which will cause
+                // writes to fail later)
+                plot_file
+                    .preallocate(plot_file_size)
+                    .map_err(SingleDiskFarmError::CantPreallocatePlotFile)?;
+                // Truncating file (if necessary)
+                plot_file.set_len(plot_file_size)?;
+            }
+
+            Arc::new(plot_file)
+        };
 
         let piece_cache = DiskPieceCache::new(if cache_capacity == 0 {
             None
