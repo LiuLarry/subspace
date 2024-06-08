@@ -2,20 +2,18 @@
 
 use std::time::Instant;
 use std::{cmp::min, io, vec};
-use std::path::Path;
 use std::sync::{LazyLock, Arc};
 use std::collections::HashMap;
 use std::io::Read;
 
-use bincode::Encode;
-
 use log::info;
+use dirs;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
-use tokio_util::bytes::Buf;
+use tokio_util::bytes::{Buf, Bytes};
 use tokio_util::io::StreamReader;
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use rust_lapper::{Interval, Lapper};
 
 use aws_types::region::Region;
@@ -25,9 +23,7 @@ use aws_sdk_s3::config::{Credentials, SharedCredentialsProvider};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 
-use warp::{Filter, Stream};
-use warp::hyper::body::Bytes;
-use futures_util::TryFutureExt;
+use futures_util::{Stream, TryFutureExt};
 use futures_util::TryStreamExt;
 
 use crate::datastore::Datastore;
@@ -39,7 +35,7 @@ static SERVER_URL: LazyLock<String> = LazyLock::new(|| {
 });
 
 static S3_CLIENT_CONTEXT: LazyLock<Arc<Context>> = LazyLock::new(|| {
-    get_s3_client()
+    get_s3_client().unwrap()
 });
 
 pub async fn object_exist(
@@ -48,15 +44,16 @@ pub async fn object_exist(
     S3_CLIENT_CONTEXT.datastore.read().unwrap().get(&key).is_some()
 }
 
+// 447 MB
+static DEFAULT_UPLOAD_PART_SIZE: usize = 447 * 1024 * 1024;
+
 async fn multipart_upload(
     client: &Client,
     bucket: &str,
     key: &str,
-    mut body: Bytes
+    mut body: Bytes,
+    part_size: usize,
 ) -> Result<()> {
-    // 447 MB
-    const UPLOAD_PART_SIZE: usize = 447 * 1024 * 1024;
-
     let upload_out = client.create_multipart_upload()
         .bucket(bucket)
         .key(key)
@@ -70,8 +67,9 @@ async fn multipart_upload(
     let mut etags = Vec::new();
     let mut part_num = 1;
 
+    // TODO 并发优化
     while body.len() > 0 {
-        let read_size = min(UPLOAD_PART_SIZE, body.len());
+        let read_size = min(part_size, body.len());
         let upload_data = body.split_to(read_size);
 
         let etag = client.upload_part()
@@ -172,8 +170,8 @@ pub async fn put_object(
 
             let fut = tokio::spawn(async move {
                 let fut = async {
-                    let _guard = sem_guard;
-                    multipart_upload(&s3client, &bucket, &key, upload_data).await
+                    let _guard = sem_guard; // 这段代码的作用？
+                    multipart_upload(&s3client, &bucket, &key, upload_data, DEFAULT_UPLOAD_PART_SIZE).await
                 };
 
                 tokio::select! {
@@ -209,19 +207,18 @@ pub async fn put_object(
 pub async fn put_zero_object(
     key: &str,
     data_len: u64
-)  {
+)  -> Result<()> {
     let buff = [0u8; 8192];
     let stream = futures_util::stream::repeat_with(|| Ok(buff.as_slice()));
 
-    let res = put_object(
+    put_object(
         key.to_string(),
         data_len,
         stream
-    ).await;
-    // TODO 代码重试
+    ).await
 }
 
-#[derive(Encode, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Part {
     pub offset: u64,
     pub data: Vec<u8>,
@@ -230,25 +227,23 @@ pub struct Part {
 pub async fn update_object(
     key: &str,
     offset: u64,
-    content_len: u64,
-    body: impl AsyncRead + Send + 'static,
-) {
-    let ctx = get_s3_client();
-    let s3config = &ctx.s3config;
-    let s3client = &ctx.s3client;
+    mut content_len: u64,
+    body: impl Stream<Item=Result<impl Buf, warp::Error>> + Unpin,
+) -> Result<()> {
+    let s3config = &S3_CLIENT_CONTEXT.s3config;
+    let s3client = &S3_CLIENT_CONTEXT.s3client;
     let key = key.to_string();
 
-    let lock = ctx.tasks.lock()
+    let lock = S3_CLIENT_CONTEXT.tasks.lock()
         .unwrap()
         .entry(key.clone())
         .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
         .clone();
 
     let _guard = lock.read().await;
-    let obj = ctx.datastore.read().unwrap().get(&key).ok_or_else(|| anyhow!("{} not found", key))?;
+    let obj = S3_CLIENT_CONTEXT.datastore.read().unwrap().get(&key).ok_or_else(|| anyhow!("{} not found", key))?;
     let part_size = obj.part_size;
 
-    ensure!(offset + content_len <= obj.total_size);
     let mut reader = StreamReader::new(body.map_err(|e| io::Error::new(io::ErrorKind::Other, e)));
     let mut buff = vec![0u8; part_size as usize];
 
@@ -294,7 +289,7 @@ pub async fn update_object(
         content_len -= part_size - (offset % part_size);
     }
 
-    multipart_upload(s3client, &s3config.bucket, &format!("{}/{}", key, parts_num), Bytes::copy_from_slice(&buff)).await?;
+    multipart_upload(s3client, &s3config.bucket, &format!("{}/{}", key, parts_num), Bytes::copy_from_slice(&buff), DEFAULT_UPLOAD_PART_SIZE).await?;
 
     parts_num += 1;
 
@@ -317,12 +312,13 @@ pub async fn update_object(
             s3reader.read_exact(&mut buff[read_len as usize..]).await?;
         }
 
-        multipart_upload(s3client, &s3config.bucket, &format!("{}/{}", key, parts_num), Bytes::copy_from_slice(&buff)).await?;
+        multipart_upload(s3client, &s3config.bucket, &format!("{}/{}", key, parts_num), Bytes::copy_from_slice(&buff), DEFAULT_UPLOAD_PART_SIZE).await?;
 
         content_len -= read_len;
         parts_num += 1;
     }
     Ok(())
+    
 }
 
 pub async fn get_object_with_ranges(
@@ -331,15 +327,14 @@ pub async fn get_object_with_ranges(
     ranges: &[(u64, u64)],
 ) -> Result<Vec<Part>> {
     let t = Instant::now();
-    let ctx = get_s3_client();
-    let s3config = &ctx.s3config;
-    let s3client = &ctx.s3client;
+    let s3config = &S3_CLIENT_CONTEXT.s3config;
+    let s3client = &S3_CLIENT_CONTEXT.s3client;
 
     if ranges.is_empty() {
         return Ok(Vec::new());
     }
 
-    let lock = ctx.tasks.lock()
+    let lock = S3_CLIENT_CONTEXT.tasks.lock()
         .unwrap()
         .entry(key.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
@@ -347,7 +342,7 @@ pub async fn get_object_with_ranges(
 
     let _guard = lock.read().await;
 
-    let obj = ctx.datastore.read().unwrap().get(&key).ok_or_else(|| anyhow!("{} not found", key))?;
+    let obj = S3_CLIENT_CONTEXT.datastore.read().unwrap().get(&key).ok_or_else(|| anyhow!("{} not found", key))?;
     let part_size = obj.part_size;
 
     let parts = ranges.iter()
@@ -466,17 +461,6 @@ pub async fn get_object_with_ranges(
                     list
                 };
     
-                // if merge_parts.len() == parts.len() {
-                //     for (from, (offset, to)) in merge_parts
-                //         .into_iter()
-                //         .zip(parts) {
-                //         ensure!(from.offset == (*offset) as u64 && from.data.len() == to.len());
-                //         to.copy_from_slice(&from.data);
-                //     }
-                //
-                //     return Ok(());
-                // }
-    
                 // overlapping
                 let v = merge_parts.into_iter()
                     .map(|part| Interval {
@@ -543,40 +527,6 @@ pub async fn get_object_with_ranges(
     futs_res?;
     info!("get object with ranges use: {:?}, ranges: {}", t.elapsed(), ranges.len());
     Ok(parts)
-    // let mut count = 0;
-
-    // loop {
-    //     let fut = async {
-    //         let path = format!("{}/getobjectwithranges", SERVER_URL.as_str());
-
-    //         let resp = CLIENT.get(path)
-    //             .query(&[("key", key)])
-    //             .json(ranges)
-    //             .send()
-    //             .await?;
-
-    //         if !resp.status().is_success() {
-    //             let err = resp.text().await?;
-    //             return Err(anyhow!(err));
-    //         }
-
-    //         let buff = resp.bytes().await?;
-    //         let parts: Vec<Part> = bincode::decode_from_slice(buff.as_ref(), bincode::config::standard())?.0;
-    //         Ok(parts)
-    //     };
-
-    //     match fut.await {
-    //         Ok(v) => return Ok(v),
-    //         Err(e) => {
-    //             if count < RETRY {
-    //                 error!("get_object_with_ranges: {:?}; retry", e);
-    //             } else {
-    //                 return Err(e);
-    //             }
-    //         }
-    //     }
-    //     count += 1;
-    // }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -586,6 +536,7 @@ pub struct S3Config {
     pub region: String,
     pub access_key: Option<String>,
     pub secret_key: Option<String>,
+    pub part_size: u64
 }
 
 struct Context {
@@ -612,12 +563,12 @@ fn parse_range(range_str: &str) -> Result<(u64, u64, u64)> {
         .map_err(|_| anyhow!("parse range error"))
 }
 
-// TODO 提取ctx出来
-fn get_s3_client() -> Arc<Context> {
-    let s3_config_path = "";
-    let part_size: u64 = 0;
-    let path: Path = "datastore.json";
+fn get_s3_client() -> Result<Arc<Context>> {
+    let s3_config_path = dirs::home_dir().unwrap().join(".s3config");
     let s3_config: S3Config = serde_json::from_reader(std::fs::File::open(s3_config_path)?)?;
+    let part_size: u64 = s3_config.part_size;
+
+    let path = dirs::home_dir().unwrap().join("datastore.json");
 
     let mut builder = SdkConfig::builder()
         .endpoint_url(&s3_config.endpoint)
@@ -641,7 +592,5 @@ fn get_s3_client() -> Arc<Context> {
         s3config: s3_config,
     };
 
-    let ctx = Arc::new(ctx);
-    return ctx;
-
+    Ok(Arc::new(ctx))
 }

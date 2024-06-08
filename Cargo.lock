@@ -9599,6 +9599,7 @@ dependencies = [
  "aws-types",
  "bincode 2.0.0-rc.3",
  "clap",
+ "dirs",
  "futures-util",
  "log",
  "log4rs",
