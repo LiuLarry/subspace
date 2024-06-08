@@ -830,6 +830,7 @@ impl SingleDiskFarm {
                         sectors_being_modified: &sectors_being_modified,
                         global_mutex: &global_mutex,
                         plotter,
+                        plot_file_key
                     },
                 };
 
@@ -1343,11 +1344,10 @@ impl SingleDiskFarm {
         let plot_file_key = crate::covert_to_s3key(&directory.join(Self::PLOT_FILE));
 
         let plot_file = if std::env::var("RANDRW_S3_SERVER").is_ok() {
-            // TODO: import s3client and use exist method;
-            let exist = false;
+            let exist = raw_s3_client::object_exist(&plot_file_key).await.unwrap();
 
             if !exist {
-                // TODO: import s3client and use put_zero_object
+                raw_s3_client::put_zero_object(&plot_file_key, plot_file_size).await;
             }
 
             #[cfg(not(windows))]

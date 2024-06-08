@@ -103,6 +103,7 @@ pub(super) struct SectorPlottingOptions<'a, NC, P> {
     pub(super) sectors_being_modified: &'a AsyncRwLock<HashSet<SectorIndex>>,
     pub(super) global_mutex: &'a AsyncMutex<()>,
     pub(super) plotter: P,
+    pub(super) plot_file_key: String,
 }
 
 pub(super) struct PlottingOptions<'a, NC, P> {
@@ -241,6 +242,7 @@ where
         sectors_being_modified,
         global_mutex,
         plotter,
+        plot_file_key
     } = sector_plotting_options;
 
     let SectorToPlot {
@@ -521,17 +523,17 @@ async fn plot_single_sector_internal(
 
             loop {
                 let sector = sector.clone();
-                let data = vec![1u8; size as usize];
-                let result = randrw_s3_client::update_object(
-                    &covert_to_s3key(&plot_file.path()),
-                    sector_index,
-                    sector,
-                    Cursor::new(data)
-                );
-                match result {
-                    // Error => 
+                let res = randrw_s3_client::update_object(&plot_file_key, (sector_index as usize * sector_size) as u64, sector.len() as u64, std::io::Cursor::new(sector)).await;
+                match res {
+                    Ok(_) => break,
+                    Err(e) => {
+                        if count < RETRY {
+                            tracing::error!("update_object error: {:?}; retry", e);
+                        } else {
+                            panic!("update object panic; cause: {:?}", e);
+                        }
+                    }
                 }
-                // TODO: import randrw_s3_client and use update_object method.
             }
         } else {
             let sector_write_base_offset = u64::from(sector_index) * sector_size as u64;
