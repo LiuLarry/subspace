@@ -325,9 +325,9 @@ where
                 *sector_size,
                 plot_file,
                 metadata_file,
+                plot_file_key.to_string(),
                 handlers,
                 sectors_being_modified,
-                plot_file_key.clone(),
                 global_mutex,
                 progress_receiver,
             )
@@ -525,7 +525,12 @@ async fn plot_single_sector_internal(
 
             loop {
                 let sector = sector.clone();
-                let res = randrw_s3_client::update_object(&plot_file_key, (sector_index as usize * sector_size) as u64, sector.len() as u64, std::io::Cursor::new(sector)).await;
+                let res = randrw_s3_client::update_object(
+                    &plot_file_key,
+                    (sector_index as usize * sector_size) as u64,
+                    sector.len() as u64,
+                    std::io::Cursor::new(sector)
+                ).await;
                 match res {
                     Ok(_) => break,
                     Err(e) => {

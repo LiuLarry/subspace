@@ -719,6 +719,8 @@ impl SingleDiskFarm {
 
         let (error_sender, error_receiver) = oneshot::channel();
         let error_sender = Arc::new(Mutex::new(Some(error_sender)));
+        let plot_file_key = crate::convert_to_s3key(&directory.clone().join(Self::PLOT_FILE));
+
 
         let tasks = FuturesUnordered::<BackgroundTask>::new();
 
@@ -810,7 +812,6 @@ impl SingleDiskFarm {
             let span = span.clone();
             let global_mutex = Arc::clone(&global_mutex);
 
-            let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
             let plot_file_key = plot_file_key.clone();
 
             move || {
@@ -979,7 +980,6 @@ impl SingleDiskFarm {
             })
         }));
 
-        let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
         let plot_file_key = plot_file_key.clone();
 
         let (piece_reader, reading_fut) = DiskPieceReader::new::<PosTable>(
@@ -1058,7 +1058,7 @@ impl SingleDiskFarm {
         Ok(farm)
     }
 
-    async fn init<NC, P>(
+    fn init<NC, P>(
         options: &SingleDiskFarmOptions<NC, P>,
     ) -> Result<SingleDiskFarmInit, SingleDiskFarmError>
     where
@@ -1344,8 +1344,6 @@ impl SingleDiskFarm {
 
             Arc::new(AsyncRwLock::new(sectors_metadata))
         };
-
-        let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
 
         let plot_file = if std::env::var("RANDRW_S3_SERVER").is_ok() {
             let exist = randrw_s3_client::object_exist(&plot_file_key).await;
