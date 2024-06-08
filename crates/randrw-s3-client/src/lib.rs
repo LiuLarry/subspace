@@ -30,10 +30,6 @@ use crate::datastore::Datastore;
 
 mod datastore;
 
-static SERVER_URL: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("RANDRW_S3_SERVER").unwrap()
-});
-
 static S3_CLIENT_CONTEXT: LazyLock<Arc<Context>> = LazyLock::new(|| {
     get_s3_client().unwrap()
 });

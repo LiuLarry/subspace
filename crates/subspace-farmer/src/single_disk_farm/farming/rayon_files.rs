@@ -62,7 +62,7 @@ impl RayonFiles<File> {
             None
         };
 
-        let key = crate::convert_path_to_key(path);
+        let key = crate::convert_to_s3key(path);
         
 
         Ok(Self { files, key })
@@ -86,9 +86,7 @@ where
             None
         };
         
-        let files = (0..rayon::current_num_threads());
-            
-        let key = crate::convert_path_to_key(path);
+        let key = crate::convert_to_s3key(path);
 
         Ok(Self { files, key })
     }

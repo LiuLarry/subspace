@@ -327,6 +327,7 @@ where
                 metadata_file,
                 handlers,
                 sectors_being_modified,
+                plot_file_key.clone(),
                 global_mutex,
                 progress_receiver,
             )
@@ -441,6 +442,7 @@ async fn plot_single_sector_internal(
     #[cfg(windows)] plot_file: &UnbufferedIoFileWindows,
     #[cfg(not(windows))] metadata_file: &File,
     #[cfg(windows)] metadata_file: &UnbufferedIoFileWindows,
+    plot_file_key: String,
     handlers: &Handlers,
     sectors_being_modified: &AsyncRwLock<HashSet<SectorIndex>>,
     global_mutex: &AsyncMutex<()>,

@@ -60,16 +60,16 @@ pub use jsonrpsee;
 /// Size of the LRU cache for peers.
 pub const KNOWN_PEERS_CACHE_SIZE: u32 = 100;
 
-use std::{f64::consts::E, path::path};
+use std::path::Path;
 
-fn covert_to_s3key(path: &Path) -> String {
+fn convert_to_s3key(path: &Path) -> String {
     let list = path.to_str().unwrap().split_terminator('/').collect::<Vec<_>>();
     assert!(list.len() > 0);
 
     let key = if list.len() == 1 {
         list[list.len() - 1].to_string()
     } else {
-        path::new(list[list.len() - 2])
+        Path::new(list[list.len() - 2])
             .join(list[list.len() - 1])
             .to_str()
             .unwrap()

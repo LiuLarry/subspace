@@ -13146,6 +13146,7 @@ dependencies = [
  "base58",
  "blake2 0.10.6",
  "blake3",
+ "bytes",
  "bytesize",
  "clap",
  "criterion",

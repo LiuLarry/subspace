@@ -655,6 +655,7 @@ impl Farm for SingleDiskFarm {
 
 impl SingleDiskFarm {
     pub const PLOT_FILE: &'static str = "plot.bin";
+    pub const PLOT_FILE_REMOTE: &'static str = "plot-remote";
     pub const METADATA_FILE: &'static str = "metadata.bin";
     const SUPPORTED_PLOT_VERSION: u8 = 0;
 
@@ -809,7 +810,7 @@ impl SingleDiskFarm {
             let span = span.clone();
             let global_mutex = Arc::clone(&global_mutex);
 
-            let plot_file_key = crate::covert_to_s3key(&directory.join(Self::PLOT_FILE));
+            let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
             let plot_file_key = plot_file_key.clone();
 
             move || {
@@ -978,6 +979,9 @@ impl SingleDiskFarm {
             })
         }));
 
+        let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
+        let plot_file_key = plot_file_key.clone();
+
         let (piece_reader, reading_fut) = DiskPieceReader::new::<PosTable>(
             public_key,
             pieces_in_sector,
@@ -1054,7 +1058,7 @@ impl SingleDiskFarm {
         Ok(farm)
     }
 
-    fn init<NC, P>(
+    async fn init<NC, P>(
         options: &SingleDiskFarmOptions<NC, P>,
     ) -> Result<SingleDiskFarmInit, SingleDiskFarmError>
     where
@@ -1341,13 +1345,13 @@ impl SingleDiskFarm {
             Arc::new(AsyncRwLock::new(sectors_metadata))
         };
 
-        let plot_file_key = crate::covert_to_s3key(&directory.join(Self::PLOT_FILE));
+        let plot_file_key = crate::convert_to_s3key(&directory.join(Self::PLOT_FILE));
 
         let plot_file = if std::env::var("RANDRW_S3_SERVER").is_ok() {
-            let exist = raw_s3_client::object_exist(&plot_file_key).await.unwrap();
+            let exist = randrw_s3_client::object_exist(&plot_file_key).await;
 
             if !exist {
-                raw_s3_client::put_zero_object(&plot_file_key, plot_file_size).await;
+                randrw_s3_client::put_zero_object(&plot_file_key, plot_file_size).await;
             }
 
             #[cfg(not(windows))]
