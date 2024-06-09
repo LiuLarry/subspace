@@ -468,6 +468,7 @@ where
                 
                 loop {
                     let sector = sector.clone();
+                    debug!("Update sector index {:?}, sector size {}", sector_index, sector_size);
                     let res = randrw_s3_client::update_object(&plot_file_key, (sector_index as usize * sector_size) as u64, sector.len() as u64, std::io::Cursor::new(sector)).await;
 
                     match res {

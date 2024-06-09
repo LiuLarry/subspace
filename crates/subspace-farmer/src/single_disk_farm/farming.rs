@@ -330,6 +330,7 @@ where
         }
 
         let key = self.0.key().unwrap();
+        info!("farmer get object {} with range {:?}", key, ranges);
         let parts = randrw_s3_client::get_object_with_ranges(key, &ranges).await.unwrap();
 
         let mut record_index_list = Vec::new();

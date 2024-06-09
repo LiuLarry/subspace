@@ -9,6 +9,7 @@ use subspace_core_primitives::{
 };
 use subspace_verification::is_within_solution_range;
 use thiserror::Error;
+use tracing::{debug, error, info, trace, warn, Span};
 
 /// Errors that happen during proving
 #[derive(Debug, Error)]
@@ -157,6 +158,11 @@ pub async fn audit_plot_sync_qiniu<'a, Plot>(
     }
 
     let key: &str = plot.key().unwrap();
+    if std::env::var("DEBUG_SUBSPACE").is_ok() {
+        debug!("Skip get object {} with range {:?} in test env", key, ranges);
+        return Ok(Vec::new());
+    }
+
     let parts = match randrw_s3_client::get_object_with_ranges(key, &ranges).await {
         Ok(v) => v,
         Err(e) => {
